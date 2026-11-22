@@ -63,6 +63,7 @@ const N = {rhythmReal: 3, digitsReal: 2};
 const NAME = {rhythm: "박자 따라 치기", digits: "숫자 듣기"};
 const $app = document.getElementById("app"), $say = document.getElementById("say");
 let P = null, ctx = null, aborted = false, koVoice = null;
+const ADMIN = new URLSearchParams(location.search).has("admin");  // 진행자 전용 화면: 주소 끝에 ?admin
 
 /* ---------- 저장 ---------- */
 const store = {get(k){try{return JSON.parse(localStorage.getItem(k));}catch(e){return null;}},
@@ -243,8 +244,9 @@ function diagnosis(){  // 탈락 원인: 실전 리듬 문항에서 기준별로
     <p class="note">기준선(섭동 없음) 평균 비동기 ${bm} ms, 비동기 표준편차 ${bs} ms. 보통 사람은 평균 비동기가 음수(소리보다 먼저 누름)다. 크게 양수면 장비 지연을 의심한다.</p>`;
 }
 function statsHtml(){
+  if (!ADMIN) return "";
   const s = summary();
-  return `<h2>누적 결과 (안대, ${s.people}명)</h2>
+  return `<h2>누적 결과 (본실험, ${s.people}명)</h2>
   <table><tr><th>과제</th><th>실전 문항</th><th>문항 통과율 (95% CI)</th><th>참가자 평균 통과율</th><th>과반 통과 참가자</th></tr>
   ${s.rows.map(([name, b]) => `<tr><td>${name}</td><td>${b.n}</td><td>${pct(b.rate)} (${pct(b.lo)}~${pct(b.hi)})</td><td>${pct(b.pm)}</td><td>${b.maj}/${b.people}</td></tr>`).join("")}</table>
   ${diagnosis()}
@@ -284,10 +286,10 @@ function home(){
   <fieldset><legend>동의</legend><label class="opt"><input type="checkbox" id="consent"> 참가자가 동의했습니다 (미성년자는 보호자 동의서 제출 완료)</label></fieldset>
   <fieldset><legend>참가 번호</legend><input type="text" id="pnum" inputmode="numeric" maxlength="3" value="${(allRecs().length + 1)}"></fieldset>
   <fieldset><legend>조건</legend>
-    <label class="opt"><input type="radio" name="cond" value="blindfold" checked> 안대 착용 (본실험)</label>
+    <label class="opt"><input type="radio" name="cond" value="blindfold" checked> 본실험 (화면이 꺼진 채 진행)</label>
     <label class="opt"><input type="radio" name="cond" value="practice"> 화면 보며 연습 (통계에서 빠짐)</label></fieldset>
   <div class="row"><button id="go">소리 확인 후 시작</button></div><p id="msg"></p>
-  ${allRecs().length ? statsHtml() : ""}`);
+  ${ADMIN && allRecs().length ? statsHtml() : ""}`);
   document.getElementById("go").onclick = start; wire();
 }
 async function start(){
@@ -308,7 +310,7 @@ async function start(){
   document.getElementById("ok").onclick = ready;
 }
 async function ready(){
-  render(`<h2>준비</h2><p>참가자에게 스페이스바, 엔터, 숫자 줄, R 키 위치를 손으로 익히게 한 뒤 안대를 씌웁니다.</p>
+  render(`<h2>준비</h2><p>참가자에게 스페이스바, 엔터, 숫자 줄, R 키 위치를 손으로 익히게 합니다.</p>
     <p>참가자가 스페이스바를 누르면 화면이 꺼지고 음성 안내로 진행됩니다. 진행자는 돕지 않습니다. 중단은 Esc.</p>
     <p class="note">순서: ${P.order.map(k => NAME[k]).join(" → ")} · 리듬은 연습 1, 기준선 1, 실전 ${N.rhythmReal} · 숫자는 연습 1, 실전 ${N.digitsReal}</p>`);
   await waitKey(e => e.code === "Space"); if (aborted) return finish();
@@ -323,8 +325,8 @@ function finish(){
   if (P.trials.length) addRec(P); store.set("act5_current", null);
   const mine = P.trials.filter(t => t.phase === "real");
   render(`<h2>${aborted ? "중단했습니다" : "끝났습니다. 고맙습니다"}</h2>
-    <p>이 참가자: 리듬 실전 ${mine.filter(t => t.kind === "rhythm" && t.pass).length}/${mine.filter(t => t.kind === "rhythm").length} 통과,
-    숫자 실전 ${mine.filter(t => t.kind === "digits" && t.pass).length}/${mine.filter(t => t.kind === "digits").length} 통과</p>
+    ${ADMIN ? `<p>이 참가자: 리듬 실전 ${mine.filter(t => t.kind === "rhythm" && t.pass).length}/${mine.filter(t => t.kind === "rhythm").length} 통과,
+    숫자 실전 ${mine.filter(t => t.kind === "digits" && t.pass).length}/${mine.filter(t => t.kind === "digits").length} 통과</p>` : "<p>결과가 저장되었습니다.</p>"}
     <div class="row"><button id="next">다음 참가자</button></div>${statsHtml()}`);
   document.getElementById("next").onclick = () => { P = null; home(); }; wire();
   if (!aborted) speak("끝났습니다. 고맙습니다.");
