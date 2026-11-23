@@ -69,7 +69,13 @@ const ADMIN = new URLSearchParams(location.search).has("admin");  // 진행자 �
 const store = {get(k){try{return JSON.parse(localStorage.getItem(k));}catch(e){return null;}},
                set(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}};
 const allRecs = () => store.get("act5_recs") || [];
-const addRec = r => { const a = allRecs().filter(x => x.pid !== r.pid); a.push(r); store.set("act5_recs", a); };
+const addRec = r => { const a = allRecs().filter(x => (x.uid || x.pid) !== (r.uid || r.pid)); a.push(r); store.set("act5_recs", a); };
+const nextNum = () => allRecs().reduce((m, r) => Math.max(m, r.num || parseInt(String(r.pid).slice(1), 10) || 0), 0) + 1;
+function makeUid(){  // 사람마다 겹치지 않는 고유번호: 날짜 + 무작위 4자
+  const d = new Date(), md = String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0");
+  const abc = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789", r = new Uint8Array(4); crypto.getRandomValues(r);
+  let u; do { u = `${md}-${[...r].map(x => abc[x % abc.length]).join("")}`; crypto.getRandomValues(r); }
+  while (allRecs().some(x => x.uid === u)); return u; }
 const setup = () => store.get("act5_setup") || {};
 
 /* ---------- 도구 ---------- */
@@ -253,15 +259,24 @@ function statsHtml(){
   <p class="note">이 브라우저에 저장된 기록만 모은 결과입니다.</p>
   ${ADMIN ? `<div class="row"><button class="quiet" id="json">전체 기록(JSON) 내보내기</button><button class="quiet" id="csv">CSV 내보내기</button><button class="quiet" id="wipe">기록 모두 지우기</button></div>` : ""}`;
 }
+function roster(){  // 진행자 전용: 참가자 목록
+  if (!ADMIN) return "";
+  const a = allRecs(), main = a.filter(r => r.cond === "blindfold"), done = main.filter(r => !r.aborted);
+  const f = (r, k) => { const t = r.trials.filter(t => t.kind === k && t.phase === "real"); return t.length ? `${t.filter(x => x.pass).length}/${t.length}` : "-"; };
+  const tm = x => x ? new Date(x).toLocaleString("ko-KR", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"}) : "-";
+  return `<h2>참가자 목록 (전체 ${a.length}명 · 본실험 ${main.length}명 · 완료 ${done.length}명)</h2>
+  <table><tr><th>순번</th><th>고유번호</th><th>조건</th><th>시작</th><th>리듬 실전</th><th>숫자 실전</th><th>상태</th></tr>
+  ${a.map(r => `<tr><td>${r.num || r.pid}</td><td>${r.uid || "(이전 기록)"}</td><td>${r.cond === "blindfold" ? "본실험" : "연습"}</td><td>${tm(r.started)}</td><td>${f(r, "rhythm")}</td><td>${f(r, "digits")}</td><td>${r.aborted ? "중단" : "완료"}</td></tr>`).join("")}</table>`;
+}
 function download(name, text, type){ const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], {type})); a.download = name; a.click(); }
 function wire(){
   const j = document.getElementById("json"), c = document.getElementById("csv"), w = document.getElementById("wipe");
   if (j) j.onclick = () => download("act5_results.json", JSON.stringify(allRecs()), "application/json");
   if (c) c.onclick = () => {
-    const cols = ["pid","cond","laptop","device","order","kind","phase","pass_primary","fails_primary","alpha","beta","noise","residual","mean_async","sd_async","missed","code","response","replays","rt_s","seq"];
+    const cols = ["uid","pid","cond","laptop","device","order","kind","phase","pass_primary","fails_primary","alpha","beta","noise","residual","mean_async","sd_async","missed","code","response","replays","rt_s","seq"];
     const rows = [cols.join(",")];
     allRecs().forEach(r => r.trials.forEach(t => { const f = t.features || {};
-      rows.push([r.pid, r.cond, r.setup.laptop, r.setup.device, r.order.join("-"), t.kind, t.phase, t.pass,
+      rows.push([r.uid || "", r.pid, r.cond, r.setup.laptop, r.setup.device, r.order.join("-"), t.kind, t.phase, t.pass,
         t.verdicts ? t.verdicts[PRIMARY].fails.join("|") : "", f.alpha, f.beta, f.noise, f.residual, f.mean_async, f.sd_async, f.missed,
         t.code || "", t.response || "", t.replays || 0, (t.rt_s || 0).toFixed(2), (r.seq || {})[t.kind] || ""].join(",")); }));
     download("act5_results.csv", "﻿" + rows.join("\n"), "text/csv"); };
@@ -273,7 +288,7 @@ function home(){
   aborted = false; const s = setup();
   render(`<h1>듣고 누르는 사람 확인 실험</h1>
   <p class="sub">대전대신고 ACT(KE)_5 · 1인 약 2분 · 이름과 연락처는 저장하지 않습니다</p>
-  ${statsHtml()}
+  ${statsHtml()}${roster()}
   <h2>진행자 설정 (실험 시작 전 한 번)</h2>
   <p class="note">모든 참가자를 같은 장비로 진행합니다. 장비 차이가 결과에 섞이지 않게 하기 위해서입니다.</p>
   <fieldset><legend>장비 고정 확인</legend>
@@ -286,7 +301,7 @@ function home(){
     <label class="opt"><input type="radio" name="dev" value="bt" ${s.device === "bt" ? "checked" : ""}> 블루투스 (지연 때문에 권장하지 않음)</label></fieldset>
   <h2>참가자</h2>
   <fieldset><legend>동의</legend><label class="opt"><input type="checkbox" id="consent"> 참가자가 동의했습니다 (미성년자는 보호자 동의서 제출 완료)</label></fieldset>
-  <fieldset><legend>참가 번호</legend><input type="text" id="pnum" inputmode="numeric" maxlength="3" value="${(allRecs().length + 1)}"></fieldset>
+  <fieldset><legend>참가 번호</legend><p>${nextNum()}번째 참가자 · 고유번호는 시작할 때 자동으로 붙습니다</p></fieldset>
   <fieldset><legend>조건</legend>
     <label class="opt"><input type="radio" name="cond" value="blindfold" checked> 본실험 (화면이 꺼진 채 진행)</label>
     <label class="opt"><input type="radio" name="cond" value="practice"> 화면 보며 연습 (통계에서 빠짐)</label></fieldset>
@@ -298,11 +313,11 @@ async function start(){
   const msg = t => document.getElementById("msg").innerHTML = `<span class="err">${t}</span>`;
   if ([...document.querySelectorAll(".chk")].some(c => !c.checked)) return msg("장비 고정 항목 3개를 모두 확인해 주세요.");
   if (!document.getElementById("consent").checked) return msg("동의를 확인해 주세요.");
-  const n = parseInt(document.getElementById("pnum").value, 10); if (!Number.isFinite(n)) return msg("참가 번호를 숫자로 적어 주세요.");
+  const n = nextNum();
   const s = {laptop: document.getElementById("laptop").value.trim() || "A", device: document.querySelector("input[name=dev]:checked").value};
   store.set("act5_setup", s);
   await audio();
-  P = {v: "v6-nopractice", pid: `P${n}`, cond: document.querySelector("input[name=cond]:checked").value, setup: s,
+  P = {v: "v6-nopractice", uid: makeUid(), num: n, pid: `P${n}`, cond: document.querySelector("input[name=cond]:checked").value, setup: s,
        order: n % 2 ? ["rhythm", "digits"] : ["digits", "rhythm"], trials: [], seq: {},
        env: {outputLatency: ctx.outputLatency || null, baseLatency: ctx.baseLatency || null, sampleRate: ctx.sampleRate,
              voice: koVoice ? koVoice.name : null, ua: navigator.userAgent}, started: new Date().toISOString()};
@@ -329,7 +344,8 @@ function finish(){
   render(`<h2>${aborted ? "중단했습니다" : "끝났습니다. 고맙습니다"}</h2>
     ${ADMIN ? `<p>이 참가자: 리듬 실전 ${mine.filter(t => t.kind === "rhythm" && t.pass).length}/${mine.filter(t => t.kind === "rhythm").length} 통과,
     숫자 실전 ${mine.filter(t => t.kind === "digits" && t.pass).length}/${mine.filter(t => t.kind === "digits").length} 통과</p>` : "<p>결과가 저장되었습니다.</p>"}
-    <div class="row"><button id="next">다음 참가자</button></div>${statsHtml()}`);
+    <p>고유번호 <strong>${P.uid}</strong> (${P.num}번째 참가자)</p>
+    <div class="row"><button id="next">다음 참가자</button></div>${statsHtml()}${roster()}`);
   document.getElementById("next").onclick = () => { P = null; home(); }; wire();
   if (!aborted) speak("끝났습니다. 고맙습니다.");
 }
