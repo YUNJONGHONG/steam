@@ -55,10 +55,14 @@ body.dark main{display:none}
    ===================================================================== */
 (() => {
 const RULESETS = {
+  "v5_정규화": {alpha: [0.1, 1.2], beta: [-1.6, -0.4], residual_z: [0, 1.5]},
+  // v5 (2026-11-23 13:30, 본실험 전 고정): 파일럿 2명 분석 후 수정. 잡음 기준 삭제(봇 차단 기여 0),
+  // 잔차를 그 문항의 비동기 표준편차로 나눈 상대값으로 바꿈(개인 흔들림 차이 제거).
   "v4_사전고정": {alpha: [0.1, 1.2], beta: [-1.6, -0.4], noise: [5, 45], residual: [0, 55]}
-  // 파일럿 분석으로 기준을 고칠 경우 여기에 새 이름으로 '추가'한다. v4는 지우지 않는다.
 };
-const PRIMARY = "v4_사전고정";
+const PRIMARY = "v5_정규화";
+const withZ = f => (f && f.valid && f.residual_z === undefined) ? {...f, residual_z: f.residual / Math.max(f.sd_async, 10)} : f;
+const vOf = (t, name) => verdict(withZ(t.features), RULESETS[name]);  // 저장된 특징값으로 매번 다시 판정
 const N = {rhythmReal: 3, digitsReal: 2};
 const NAME = {rhythm: "박자 따라 치기", digits: "숫자 듣기"};
 const $app = document.getElementById("app"), $say = document.getElementById("say");
@@ -158,6 +162,7 @@ function features(c, taps){
     alpha: -co[0], beta: co[1], noise: Math.sqrt(res.reduce((a, b) => a + (b - rm) ** 2, 0) / res.length),
     residual: Math.abs(nanmean(A.slice(-3)) - nanmean(A.slice(0, c.ks[0])))};
 }
+function featuresZ(c, taps){ return withZ(features(c, taps)); }
 function verdict(f, rules){
   if (!f.valid) return {pass: false, fails: ["탭 누락"]};
   const fails = Object.entries(rules).filter(([k, [lo, hi]]) => !(f[k] >= lo && f[k] <= hi)).map(([k]) => k);
@@ -171,7 +176,7 @@ async function rhythmTrial(baseline){
   c.beats.forEach(b => beep(t0 + b / 1000, 880));
   const stop = collector(e => { if (e.code === "Space"){ e.preventDefault(); if (!e.repeat) taps.push(+((atime(e) - t0) * 1000).toFixed(1)); } });
   const dur = 600 + c.beats[19] + c.ioi * 1.5; await sleep(dur); stop();
-  const f = features(c, taps), v = {};
+  const f = featuresZ(c, taps), v = {};
   Object.entries(RULESETS).forEach(([name, r]) => { v[name] = verdict(f, r); });
   return {challenge: c, taps, features: f, verdicts: v, pass: v[PRIMARY].pass, rt_s: dur / 1000};
 }
@@ -233,7 +238,7 @@ function summary(){
     const maj = per.filter(ts => ts.filter(passOf).length * 2 > ts.length).length;
     return {n: all.length, people: per.length, rate: all.length ? k / all.length : NaN, lo, hi, pm, maj};
   };
-  Object.keys(RULESETS).forEach(name => rows.push([`${NAME.rhythm} (${name})`, block("rhythm", t => t.verdicts && t.verdicts[name] && t.verdicts[name].pass)]));
+  Object.keys(RULESETS).forEach(name => rows.push([`${NAME.rhythm} (${name})`, block("rhythm", t => vOf(t, name).pass)]));
   rows.push([NAME.digits, block("digits", t => t.pass)]);
   return {people: recs.length, rows};
 }
@@ -241,8 +246,8 @@ function diagnosis(){  // 탈락 원인: 실전 리듬 문항에서 기준별로
   const ts = allRecs().filter(r => r.cond === "blindfold").flatMap(r => r.trials.filter(t => t.kind === "rhythm" && t.phase === "real"));
   if (!ts.length) return "";
   const r = RULESETS[PRIMARY], keys = ["탭 누락", ...Object.keys(r)];
-  const cnt = k => ts.filter(t => t.verdicts[PRIMARY].fails.includes(k)).length;
-  const med = k => { const v = ts.map(t => t.features[k]).filter(x => typeof x === "number").sort((a, b) => a - b); return v.length ? v[Math.floor(v.length / 2)].toFixed(2) : "-"; };
+  const cnt = k => ts.filter(t => vOf(t, PRIMARY).fails.includes(k)).length;
+  const med = k => { const v = ts.map(t => withZ(t.features)[k]).filter(x => typeof x === "number").sort((a, b) => a - b); return v.length ? v[Math.floor(v.length / 2)].toFixed(2) : "-"; };
   const base = allRecs().filter(r => r.cond === "blindfold").flatMap(r => r.trials.filter(t => t.kind === "rhythm" && t.phase === "baseline" && t.features.valid));
   const bm = base.length ? nanmean(base.map(t => t.features.mean_async)).toFixed(0) : "-", bs = base.length ? nanmean(base.map(t => t.features.sd_async)).toFixed(0) : "-";
   return `<h2>리듬 탈락 원인 (${PRIMARY}, 실전 ${ts.length}문항)</h2><table><tr><th>기준</th><th>허용 범위</th><th>벗어난 문항</th><th>중앙값</th></tr>${
@@ -273,11 +278,11 @@ function wire(){
   const j = document.getElementById("json"), c = document.getElementById("csv"), w = document.getElementById("wipe");
   if (j) j.onclick = () => download("act5_results.json", JSON.stringify(allRecs()), "application/json");
   if (c) c.onclick = () => {
-    const cols = ["uid","pid","cond","laptop","device","order","kind","phase","pass_primary","fails_primary","alpha","beta","noise","residual","mean_async","sd_async","missed","code","response","replays","rt_s","seq"];
+    const cols = ["uid","pid","cond","laptop","device","order","kind","phase","pass_primary","fails_primary","alpha","beta","noise","residual","residual_z","mean_async","sd_async","missed","code","response","replays","rt_s","seq"];
     const rows = [cols.join(",")];
     allRecs().forEach(r => r.trials.forEach(t => { const f = t.features || {};
-      rows.push([r.uid || "", r.pid, r.cond, r.setup.laptop, r.setup.device, r.order.join("-"), t.kind, t.phase, t.pass,
-        t.verdicts ? t.verdicts[PRIMARY].fails.join("|") : "", f.alpha, f.beta, f.noise, f.residual, f.mean_async, f.sd_async, f.missed,
+      rows.push([r.uid || "", r.pid, r.cond, r.setup.laptop, r.setup.device, r.order.join("-"), t.kind, t.phase, t.kind === "rhythm" && t.features ? vOf(t, PRIMARY).pass : t.pass,
+        t.features ? vOf(t, PRIMARY).fails.join("|") : "", f.alpha, f.beta, f.noise, f.residual, withZ(f).residual_z, f.mean_async, f.sd_async, f.missed,
         t.code || "", t.response || "", t.replays || 0, (t.rt_s || 0).toFixed(2), (r.seq || {})[t.kind] || ""].join(",")); }));
     download("act5_results.csv", "﻿" + rows.join("\n"), "text/csv"); };
   if (w) w.onclick = () => { if (confirm("기록을 모두 지웁니다. 먼저 JSON으로 내보냈나요?")){ store.set("act5_recs", []); home(); } };
